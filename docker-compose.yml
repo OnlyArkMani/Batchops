@@ -1,0 +1,133 @@
+# BatchOPS local stack: Postgres, Kafka (KRaft, no ZooKeeper), MinIO (S3), MailHog, API + worker.
+# The React app runs on the host:   cd frontend && npm install && npm run dev   (http://localhost:5173)
+
+x-backend-env: &backend-env
+  DB_HOST: db
+  DB_NAME: batch_platform
+  DB_USER: postgres
+  DB_PASSWORD: postgres
+  KAFKA_BOOTSTRAP: kafka:9092
+  STORAGE_TYPE: s3
+  S3_ENDPOINT: http://minio:9000
+  S3_BUCKET: batchops
+  S3_ACCESS_KEY: minioadmin
+  S3_SECRET_KEY: minioadmin
+  EMAIL_HOST: ${EMAIL_HOST:-mailhog}
+  EMAIL_PORT: ${EMAIL_PORT:-1025}
+  EMAIL_HOST_USER: ${EMAIL_HOST_USER:-}
+  EMAIL_HOST_PASSWORD: ${EMAIL_HOST_PASSWORD:-}
+  EMAIL_SMTP_AUTH: ${EMAIL_SMTP_AUTH:-false}
+  EMAIL_USE_TLS: ${EMAIL_USE_TLS:-false}
+  DEFAULT_FROM_EMAIL: ${DEFAULT_FROM_EMAIL:-no-reply@batchops.local}
+  BATCHOPS_ADMIN_USERNAME: ${BATCHOPS_ADMIN_USERNAME:-admin}
+  BATCHOPS_ADMIN_PASSWORD: ${BATCHOPS_ADMIN_PASSWORD:-}
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: batch_platform
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d batch_platform"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  kafka:
+    image: apache/kafka:3.8.0
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    ports:
+      - "29092:29092"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+
+  mailhog:
+    image: mailhog/mailhog
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+
+  # Serves the REST API + SSE. Scale workers independently of this.
+  api:
+    build:
+      context: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      <<: *backend-env
+      BATCHOPS_ROLES_API: "true"
+      BATCHOPS_ROLES_WORKER: "false"
+      BATCHOPS_ROLES_SCHEDULER: "false"
+    depends_on:
+      db:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      minio:
+        condition: service_started
+
+  # Runs the stage consumers, outbox relay, retry tiers and the scheduler.
+  # Scale with:  docker compose up -d --scale worker=3
+  worker:
+    build:
+      context: ./backend
+    environment:
+      <<: *backend-env
+      BATCHOPS_ROLES_API: "false"
+      BATCHOPS_ROLES_WORKER: "true"
+      BATCHOPS_ROLES_SCHEDULER: "true"
+    depends_on:
+      db:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      minio:
+        condition: service_started
+
+  prometheus:
+    image: prom/prometheus:latest
+    profiles: ["observability"]
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+
+volumes:
+  postgres_data:
+  kafka_data:
+  minio_data:
