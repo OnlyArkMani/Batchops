@@ -3,3 +3,4 @@ node_modules/
 frontend/dist/
 backend/target/
 backend/storage/
+batchops-backend.tar.gz
