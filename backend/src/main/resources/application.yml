@@ -1,0 +1,115 @@
+server:
+  port: 8000
+  shutdown: graceful
+
+spring:
+  application:
+    name: batchops
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:batch_platform}
+    username: ${DB_USER:postgres}
+    password: ${DB_PASSWORD:postgres}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:20}
+  jpa:
+    open-in-view: true          # controllers map entities to JSON after the service transaction closes
+    hibernate:
+      ddl-auto: none            # Flyway owns the schema (switch to "validate" in CI once the stack has run once)
+    properties:
+      hibernate:
+        default_batch_fetch_size: 50
+        jdbc:
+          time_zone: UTC
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  jackson:
+    property-naming-strategy: SNAKE_CASE
+    default-property-inclusion: always
+    serialization:
+      write-dates-as-timestamps: false
+  servlet:
+    multipart:
+      max-file-size: ${BATCHOPS_MAX_UPLOAD_MB:25}MB
+      max-request-size: ${BATCHOPS_MAX_UPLOAD_MB:25}MB
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:29092}
+    producer:
+      acks: all
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+        delivery.timeout.ms: 30000
+    consumer:
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      properties:
+        max.poll.interval.ms: 300000
+    template:
+      observation-enabled: true
+    listener:
+      observation-enabled: true
+  mail:
+    host: ${EMAIL_HOST:localhost}
+    port: ${EMAIL_PORT:1025}
+    username: ${EMAIL_HOST_USER:}
+    password: ${EMAIL_HOST_PASSWORD:}
+    properties:
+      mail.smtp.auth: ${EMAIL_SMTP_AUTH:false}
+      mail.smtp.starttls.enable: ${EMAIL_USE_TLS:false}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  tracing:
+    enabled: ${TRACING_ENABLED:false}
+    sampling:
+      probability: 1.0
+  otlp:
+    tracing:
+      endpoint: ${OTLP_ENDPOINT:http://localhost:4318/v1/traces}
+
+batchops:
+  instance-id: ${HOSTNAME:local}
+  roles:
+    api: ${BATCHOPS_ROLES_API:true}
+    worker: ${BATCHOPS_ROLES_WORKER:true}
+    scheduler: ${BATCHOPS_ROLES_SCHEDULER:true}
+  storage:
+    type: ${STORAGE_TYPE:local}          # local | s3
+    local-dir: ${STORAGE_ROOT:./storage}
+    endpoint: ${S3_ENDPOINT:http://localhost:9000}
+    bucket: ${S3_BUCKET:batchops}
+    region: ${S3_REGION:us-east-1}
+    access-key: ${S3_ACCESS_KEY:minioadmin}
+    secret-key: ${S3_SECRET_KEY:minioadmin}
+    path-style: ${S3_PATH_STYLE:true}
+  security:
+    token-ttl-hours: ${BATCHOPS_TOKEN_TTL_HOURS:24}
+    cors-origins: ${BATCHOPS_CORS_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}
+    bootstrap-admin-username: ${BATCHOPS_ADMIN_USERNAME:admin}
+    bootstrap-admin-password: ${BATCHOPS_ADMIN_PASSWORD:}
+  pipeline:
+    max-upload-mb: ${BATCHOPS_MAX_UPLOAD_MB:25}
+    score-min: 0
+    score-max: 100
+    stuck-run-minutes: ${BATCHOPS_STUCK_RUN_MINUTES:20}
+    allow-destructive-auto-fix: ${BATCHOPS_ALLOW_DESTRUCTIVE_AUTOFIX:false}
+    max-manual-retries: ${BATCHOPS_MAX_MANUAL_RETRIES:2}
+  kafka:
+    partitions: ${KAFKA_PARTITIONS:6}
+    replication-factor: ${KAFKA_REPLICATION:1}
+    concurrency: ${KAFKA_CONCURRENCY:3}
+  mail:
+    from: ${DEFAULT_FROM_EMAIL:no-reply@batchops.local}
+    enabled: ${BATCHOPS_MAIL_ENABLED:true}
